@@ -13,7 +13,7 @@ console = Console()
 def _check_dependencies():
     """
     ai-edge-torch is Linux/macOS only.
-    Windows users must run TFLite conversion on Kaggle.
+    Windows users must run TFLite conversion on Colab.
     """
     import platform
     if platform.system() == "Windows":
@@ -37,7 +37,7 @@ def run_tflite_conversion(
 ) -> Path:
     """
     Main entry point for TFLite INT8 conversion.
-    Linux/macOS only — Windows users use notebooks/kaggle_tflite.ipynb.
+    Linux/macOS only — Windows users use notebooks/colab_tflite.ipynb.
     Returns path to output .tflite file.
     """
     _check_dependencies()
