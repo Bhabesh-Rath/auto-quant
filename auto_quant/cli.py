@@ -164,5 +164,18 @@ def run(
         )
 
         print_final_summary(pareto_output, exported, model_name)
+        
+@app.command()
+def ui(
+    share: bool = typer.Option(
+        False,
+        "--share",
+        help="Create a public Gradio share link.",
+    ),
+):
+    """Launch the Auto-Quant web UI."""
+    from auto_quant.ui.app import launch
+    launch(share=share)
+    
 if __name__ == "__main__":
     app()

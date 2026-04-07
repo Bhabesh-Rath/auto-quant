@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from rich.console import Console
@@ -12,48 +10,41 @@ console = Console()
 
 def _is_pareto_efficient(points: np.ndarray) -> np.ndarray:
     """
-    Finds Pareto-efficient points where:
-    - X axis: higher is better (tok/s) or lower is better (latency_ms)
-    - Y axis: lower is better (perplexity) or lower is better (latency_ms)
-
-    points: array of shape (n, 2)
-    Returns boolean mask of Pareto-efficient points.
-
-    For our use case we always want:
-    - Maximize X (tok/s or 1/latency)
-    - Minimize Y (perplexity or latency)
-
-    So we convert to a maximization problem by negating Y.
+    Finds non-dominated points in a maximization problem.
+    points: shape (n, 2) — already converted to maximization form.
+    A point i is dominated if there exists another point j that is
+    >= on all dimensions and strictly > on at least one.
     """
-    is_efficient = np.ones(len(points), dtype=bool)
-    for i, p in enumerate(points):
-        if is_efficient[i]:
-            # A point is dominated if another point is
-            # better or equal on ALL dimensions
-            dominated = np.all(points >= p, axis=1)
-            dominated[i] = False
-            is_efficient[dominated] = False
+    n = len(points)
+    is_efficient = np.ones(n, dtype=bool)
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            if (np.all(points[j] >= points[i])
+                    and np.any(points[j] > points[i])):
+                is_efficient[i] = False
+                break
     return is_efficient
-
 
 def _find_knee_point(
     pareto_x: np.ndarray,
     pareto_y: np.ndarray,
 ) -> int:
     """
-    Finds the knee point on the Pareto frontier —
-    the point with maximum distance from the line
-    connecting the first and last frontier points.
+    Finds the knee point — maximum distance from the line
+    connecting first and last frontier points.
     Returns index into pareto arrays.
     """
     if len(pareto_x) < 3:
         return 0
 
-    # Normalize to [0,1]
-    x_norm = (pareto_x - pareto_x.min()) / (pareto_x.max() - pareto_x.min() + 1e-9)
-    y_norm = (pareto_y - pareto_y.min()) / (pareto_y.max() - pareto_y.min() + 1e-9)
+    x_range = pareto_x.max() - pareto_x.min()
+    y_range = pareto_y.max() - pareto_y.min()
 
-    # Line from first to last point
+    x_norm = (pareto_x - pareto_x.min()) / (x_range + 1e-9)
+    y_norm = (pareto_y - pareto_y.min()) / (y_range + 1e-9)
+
     p1 = np.array([x_norm[0], y_norm[0]])
     p2 = np.array([x_norm[-1], y_norm[-1]])
     line_vec = p2 - p1
@@ -62,7 +53,6 @@ def _find_knee_point(
     if line_len < 1e-9:
         return 0
 
-    # Distance from each point to the line
     distances = []
     for i in range(len(x_norm)):
         pt = np.array([x_norm[i], y_norm[i]])
@@ -72,14 +62,11 @@ def _find_knee_point(
     return int(np.argmax(distances))
 
 
-def compute_pareto_llm(
-    results: list[dict],
-) -> dict:
+def compute_pareto_llm(results: list[dict]) -> dict:
     """
-    Computes Pareto frontier for LLM results.
-    X axis: tok/s (higher is better)
-    Y axis: perplexity (lower is better)
-    Returns dict with frontier points, knee point, all points.
+    Pareto frontier for LLM results.
+    X: tok/s (higher is better)
+    Y: perplexity (lower is better)
     """
     valid = [
         r for r in results
@@ -93,8 +80,6 @@ def compute_pareto_llm(
         console.print("[yellow]Not enough valid LLM results for Pareto analysis.[/yellow]")
         return {}
 
-    # Convert to maximization: maximize tok/s, minimize perplexity
-    # So negate perplexity for dominance check
     points = np.array([
         [r["tok_s"], -r["perplexity"]]
         for r in valid
@@ -102,8 +87,6 @@ def compute_pareto_llm(
 
     mask = _is_pareto_efficient(points)
     pareto_points = [r for r, m in zip(valid, mask) if m]
-
-    # Sort by tok/s for plotting
     pareto_points.sort(key=lambda r: r["tok_s"])
 
     pareto_x = np.array([r["tok_s"] for r in pareto_points])
@@ -125,14 +108,11 @@ def compute_pareto_llm(
     }
 
 
-def compute_pareto_mobile(
-    results: list[dict],
-) -> dict:
+def compute_pareto_mobile(results: list[dict]) -> dict:
     """
-    Computes Pareto frontier for mobile/TFLite results.
-    X axis: size_mb (lower is better)
-    Y axis: estimated_latency_ms (lower is better)
-    Returns dict with frontier points, knee point, all points.
+    Pareto frontier for mobile/TFLite results.
+    X: size_mb (lower is better)
+    Y: estimated_latency_ms (lower is better)
     """
     valid = [
         r for r in results
@@ -145,8 +125,6 @@ def compute_pareto_mobile(
         console.print("[yellow]Not enough valid mobile results for Pareto analysis.[/yellow]")
         return {}
 
-    # Convert to maximization: minimize size, minimize latency
-    # Negate both for dominance check
     points = np.array([
         [-r["size_mb"], -r["estimated_latency_ms"]]
         for r in valid
@@ -180,11 +158,11 @@ def plot_pareto(
     model_name: str,
     output_dir: Path,
     label_key: str = "variant",
-) -> tuple[Path, Path]:
+):
     """
     Plots the Pareto frontier using plotly.
-    Saves both interactive HTML and static PNG.
-    Returns (html_path, png_path).
+    Saves HTML and PNG, and returns the plotly figure object.
+    Returns (html_path, png_path, fig).
     """
     try:
         import plotly.graph_objects as go
@@ -201,10 +179,12 @@ def plot_pareto(
     y_key = pareto_data["y_key"]
     x_label = pareto_data["x_label"]
     y_label = pareto_data["y_label"]
+    x_better = pareto_data.get("x_better", "higher")
+    y_better = pareto_data.get("y_better", "lower")
 
     fig = go.Figure()
 
-    # All points — gray scatter
+    # All points
     fig.add_trace(go.Scatter(
         x=[r[x_key] for r in all_points],
         y=[r[y_key] for r in all_points],
@@ -215,14 +195,14 @@ def plot_pareto(
         textfont=dict(size=11),
         name="All variants",
         hovertemplate=(
-            f"<b>%{{text}}</b><br>"
+            "<b>%{text}</b><br>"
             f"{x_label}: %{{x:.2f}}<br>"
             f"{y_label}: %{{y:.4f}}<br>"
             "<extra></extra>"
         ),
     ))
 
-    # Pareto frontier line
+    # Pareto frontier
     if pareto_points:
         fig.add_trace(go.Scatter(
             x=[r[x_key] for r in pareto_points],
@@ -233,14 +213,14 @@ def plot_pareto(
             text=[r.get(label_key, "") for r in pareto_points],
             name="Pareto frontier",
             hovertemplate=(
-                f"<b>%{{text}}</b><br>"
+                "<b>%{text}</b><br>"
                 f"{x_label}: %{{x:.2f}}<br>"
                 f"{y_label}: %{{y:.4f}}<br>"
                 "<extra></extra>"
             ),
         ))
 
-    # Knee point — highlighted
+    # Knee point
     if knee_point:
         fig.add_trace(go.Scatter(
             x=[knee_point[x_key]],
@@ -255,17 +235,14 @@ def plot_pareto(
             text=[f"Best: {knee_point.get(label_key, '')}"],
             textposition="top right",
             textfont=dict(size=12, color="#d62728"),
-            name="Knee point (recommended)",
+            name="Recommended",
             hovertemplate=(
-                f"<b>Recommended: %{{text}}</b><br>"
+                "<b>Recommended: %{text}</b><br>"
                 f"{x_label}: %{{x:.2f}}<br>"
                 f"{y_label}: %{{y:.4f}}<br>"
                 "<extra></extra>"
             ),
         ))
-
-    x_better = pareto_data.get("x_better", "higher")
-    y_better = pareto_data.get("y_better", "lower")
 
     fig.update_layout(
         title=dict(
@@ -282,12 +259,7 @@ def plot_pareto(
         ),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-        ),
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
         width=900,
         height=600,
         margin=dict(l=60, r=40, t=60, b=60),
@@ -307,7 +279,7 @@ def plot_pareto(
         console.print("[yellow]PNG export requires kaleido: uv add kaleido[/yellow]")
         png_path = None
 
-    return html_path, png_path
+    return html_path, png_path, fig
 
 
 def run_pareto_report(
@@ -322,9 +294,7 @@ def run_pareto_report(
     """
     from dataclasses import asdict
 
-    # Convert dataclass instances to dicts
     rows = [asdict(r) for r in unified_results]
-
     real_rows = [r for r in rows if r["benchmark_type"] == "real"]
     sim_rows = [r for r in rows if r["benchmark_type"] == "simulated"]
 
@@ -336,6 +306,13 @@ def run_pareto_report(
         pareto_data = compute_pareto_llm(real_rows)
         if pareto_data:
             pareto_output["llm"] = pareto_data
+            html_path, png_path, fig = plot_pareto(
+                pareto_data,
+                model_name=model_name,
+                output_dir=output_dir,
+                label_key="variant",
+            )
+            pareto_output["llm"]["fig"] = fig
             if pareto_data.get("knee_point"):
                 kp = pareto_data["knee_point"]
                 console.print(
@@ -344,18 +321,19 @@ def run_pareto_report(
                     f"({kp.get('tok_s')} tok/s, "
                     f"perplexity {kp.get('perplexity')})"
                 )
-            plot_pareto(
-                pareto_data,
-                model_name=model_name,
-                output_dir=output_dir,
-                label_key="variant",
-            )
 
     if sim_rows:
         console.print("\n[cyan]Computing mobile Pareto frontier...[/cyan]")
         pareto_data = compute_pareto_mobile(sim_rows)
         if pareto_data:
             pareto_output["mobile"] = pareto_data
+            html_path, png_path, fig = plot_pareto(
+                pareto_data,
+                model_name=model_name,
+                output_dir=output_dir,
+                label_key="variant",
+            )
+            pareto_output["mobile"]["fig"] = fig
             if pareto_data.get("knee_point"):
                 kp = pareto_data["knee_point"]
                 console.print(
@@ -364,11 +342,5 @@ def run_pareto_report(
                     f"({kp.get('size_mb')} MB, "
                     f"{kp.get('estimated_latency_ms')} ms)"
                 )
-            plot_pareto(
-                pareto_data,
-                model_name=model_name,
-                output_dir=output_dir,
-                label_key="variant",
-            )
 
     return pareto_output
