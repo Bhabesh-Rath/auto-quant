@@ -5,6 +5,14 @@ Pulls a model from HuggingFace, generates multiple quantized variants, benchmark
 them on your hardware, and outputs a Pareto frontier showing the best
 accuracy-to-speed tradeoff.
 
+## Screenshots
+
+| Auto-Quant-Tool UI | 
+|:---:|
+| <img src="Screenshots/Screenshot (48).png"> | 
+| <img src="Screenshots/Screenshot (49).png"> |
+| <img src="Screenshots/Screenshot (50).png"> |
+
 ## Supported formats
 - **GGUF** (Q2 through Q8) — for llama.cpp / Ollama local inference
 - **GPTQ** (INT4, INT8) — for GPU inference via gptqmodel
